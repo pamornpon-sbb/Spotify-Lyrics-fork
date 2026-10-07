@@ -35,6 +35,10 @@
     "message": "取消"
   },
 
+  "popupUnsyncedTag": {
+    "message": "未同步"
+  },
+
   "popupMatchDescription1": {
     "message": "尝试其他歌词或"
   },

@@ -9,7 +9,17 @@ import { sendEvent, events } from '../common/ga';
 
 import { PopupStore } from '../popup/store';
 
-import { Song, Lyric, fetchLyric, parseLyrics, matchingLyrics, correctionLyrics } from './lyrics';
+import {
+  Song,
+  Lyric,
+  fetchLyric,
+  parseLyrics,
+  matchingLyrics,
+  correctionLyrics,
+  hasSyncedLyrics,
+  isUnsyncedLyrics,
+  parseUnsyncedLyrics,
+} from './lyrics';
 import { fetchSongList, fetchGeniusLyrics } from './genius';
 import { setSong, getSong } from './store';
 import { optionsPromise } from './options';
@@ -67,6 +77,8 @@ export class SharedData {
   private _lyrics: Lyric = [];
   private _error: Error | null = null;
   private _abortController = new AbortController();
+  // fetched lyrics of the current track, avoid fetching again for unsynced lyrics
+  private _lyricsStrCache = new Map<number, string>();
 
   get cd1() {
     return `${this._name} - ${this._artists}`;
@@ -116,6 +128,7 @@ export class SharedData {
   private _resetLyrics() {
     this._lyrics = [];
     this._error = null;
+    this._lyricsStrCache.clear();
     this._cancelRequest();
   }
 
@@ -138,17 +151,37 @@ export class SharedData {
     };
   }
 
-  private async _getLyricsFromAPI(fetchOptions: RequestInit) {
-    if (this._id === 0) {
+  // `unsynced`: only accept lyrics without timestamps
+  private async _getLyricsFromAPI(fetchOptions: RequestInit, unsynced = false) {
+    const id = this._id;
+    if (id === 0) {
       return null;
     }
-    const options = await optionsPromise;
-    const lyricsStr = await fetchLyric(this._id, fetchOptions);
+    let lyricsStr = this._lyricsStrCache.get(id);
+    if (lyricsStr === undefined) {
+      const options = await optionsPromise;
+      lyricsStr = await fetchLyric(id, fetchOptions);
+      this._lyricsStrCache.set(id, lyricsStr);
+      if (lyricsStr === '') {
+        sendEvent(options.cid, events.noLyrics, { cd1: this.cd1, cd2: this.cd2 });
+      }
+    }
     if (lyricsStr === '') {
-      sendEvent(options.cid, events.noLyrics, { cd1: this.cd1, cd2: this.cd2 });
       return null;
     }
-    return parseLyrics(lyricsStr, await this._getParseLyricsOptions());
+    const parseLyricsOptions = await this._getParseLyricsOptions();
+    if (unsynced) {
+      return parseUnsyncedLyrics(lyricsStr, parseLyricsOptions);
+    }
+    // e.g. some NetEase lyrics only have credit lines
+    return hasSyncedLyrics(lyricsStr) ? parseLyrics(lyricsStr, parseLyricsOptions) : null;
+  }
+
+  private async _getAnyLyricsFromAPI(fetchOptions: RequestInit) {
+    return (
+      (await this._getLyricsFromAPI(fetchOptions)) ||
+      (await this._getLyricsFromAPI(fetchOptions, true))
+    );
   }
 
   private async _getLyricsFromBuiltIn(fetchOptions: RequestInit) {
@@ -244,7 +277,7 @@ export class SharedData {
     else if (isSelf && remoteData?.neteaseID) {
       this._id = remoteData.neteaseID;
       this._aId = this._id;
-      this._lyrics = await this._getLyricsFromAPI(fetchOptions);
+      this._lyrics = await this._getAnyLyricsFromAPI(fetchOptions);
     }
 
     // 3. use other user upload lyrics
@@ -275,6 +308,28 @@ export class SharedData {
         if (!this._lyrics) {
           this._lyrics = await this._getLyricsFromBuiltIn(fetchOptions);
         }
+        // no synced lyrics anywhere, try lyrics without timestamps
+        if (!this._lyrics) {
+          const syncedId = this._id;
+          const candidates = [
+            [main?.plainId, main],
+            [main?.id, main],
+            [fallback?.plainId, fallback],
+            [fallback?.id, fallback],
+          ] as const;
+          for (const [unsyncedId, result] of candidates) {
+            if (!unsyncedId || !result) continue;
+            this._id = unsyncedId;
+            this._lyrics = await ignoreServerError(this._getLyricsFromAPI(fetchOptions, true));
+            if (this._lyrics) {
+              id = unsyncedId;
+              this._aId = unsyncedId;
+              if (result.list.length) this._list = result.list;
+              break;
+            }
+          }
+          if (!this._lyrics) this._id = syncedId;
+        }
         // show the error only when both servers fail
         if (!this._lyrics && mainErrorCount && errors.length > mainErrorCount) {
           throw errors[errors.length - 1];
@@ -299,7 +354,8 @@ export class SharedData {
   async confirmedMId() {
     const { _name, _artists, _id } = this;
     try {
-      if (this._lyrics) {
+      // unsynced lyrics are not saved to the shared store
+      if (this._lyrics && !isUnsyncedLyrics(this._lyrics)) {
         await setSong({ name: _name, artists: _artists, id: _id });
       }
       this._aId = _id;
@@ -322,7 +378,7 @@ export class SharedData {
         await this._matching(fetchOptions);
         this.sendToContentScript();
       } else {
-        this._lyrics = await this._getLyricsFromAPI(fetchOptions);
+        this._lyrics = await this._getAnyLyricsFromAPI(fetchOptions);
       }
     } catch (e) {
       if (e.name !== 'AbortError') {

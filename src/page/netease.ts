@@ -18,6 +18,8 @@ export interface Song {
   album: Album;
   /**ms */
   duration?: number;
+  // LRCLIB song that only has unsynced lyrics
+  plainOnly?: boolean;
 }
 
 interface SearchSongsResult {

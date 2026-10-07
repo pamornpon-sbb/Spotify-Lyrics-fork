@@ -214,6 +214,7 @@ type RenderState =
       lyrics: Exclude<Lyric, null> | string[];
       currentIndex: number;
       progress: number;
+      mode?: 'unsynced';
     } & RenderLyricsOptions)
   | undefined;
 
@@ -394,11 +395,17 @@ export function renderHighlight(
   offscreenCtx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   offscreenCtx.restore();
   ctx.drawImage(offscreenCtx.canvas, 0, 0);
+  drawLabel(ctx, 'HIGHLIGHT');
+  ctx.restore();
+}
 
+// e.g. `———— HIGHLIGHT ————` at the bottom
+function drawLabel(ctx: CanvasRenderingContext2D, text: string) {
+  const marginWidth = ctx.canvas.width * 0.075;
   const fontSize = ctx.canvas.width * 0.05;
+  ctx.save();
   ctx.fillStyle = 'yellow';
   ctx.font = `bold ${fontSize}px sans-serif`;
-  const text = 'HIGHLIGHT';
   const pos = drawParagraph(ctx, text, {
     hCenter: true,
     left: marginWidth,
@@ -416,5 +423,81 @@ export function renderHighlight(
   ctx.lineTo(ctx.canvas.width - marginWidth, y);
   ctx.stroke();
 
+  ctx.restore();
+}
+
+const unsyncedHeights = new WeakMap<Exclude<Lyric, null>, { key: string; heights: number[] }>();
+// lyrics without timestamps scroll with the playback progress, no line is highlighted
+export function renderUnsyncedLyrics(
+  ctx: CanvasRenderingContext2D,
+  lyrics: Exclude<Lyric, null>,
+  progress: number, // 0-1
+  options: RenderLyricsOptions,
+) {
+  const fontSize = options.focusLineFontSize * 0.8;
+  const lineHeight = fontSize * 1.2;
+  const lineMargin = fontSize * 0.6;
+  const marginWidth = ctx.canvas.width * 0.075;
+  // leave space for the label
+  const viewHeight = ctx.canvas.height * 0.75;
+  const font = `bold ${fontSize}px ${options.fontFamily}, sans-serif`;
+  const paragraphOptions = {
+    hCenter: options.align === 'center',
+    left: marginWidth,
+    right: marginWidth,
+    lineHeight,
+  };
+
+  const key = `${font}|${ctx.canvas.width}`;
+  let cache = unsyncedHeights.get(lyrics);
+  if (cache?.key !== key) {
+    ctx.save();
+    ctx.font = font;
+    const heights = lyrics.map(
+      ({ text }) => drawParagraph(ctx, text, { ...paragraphOptions, top: 1, measure: true }).height,
+    );
+    ctx.restore();
+    cache = { key, heights };
+    unsyncedHeights.set(lyrics, cache);
+  }
+  // empty line is the gap between paragraphs
+  const heights = cache.heights.map((height) => (height || lineHeight) + lineMargin);
+  const contentHeight = heights.reduce((p, c) => p + c, 0);
+  const offset = Math.round(
+    Math.min(Math.max(progress, 0), 1) * Math.max(contentHeight - viewHeight, 0),
+  );
+
+  const nextState: RenderState = {
+    ...options,
+    lyrics,
+    currentIndex: -1,
+    progress: offset,
+    mode: 'unsynced',
+  };
+  if (isEqualState(nextState, renderState)) return;
+  renderState = nextState;
+
+  drawBackground(ctx, options.backgroundImage);
+  drawMask(ctx);
+  ctx.save();
+
+  const { offscreenCtx, gradient1 } = initOffscreenCtx(ctx);
+  offscreenCtx.save();
+  offscreenCtx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+  offscreenCtx.font = font;
+  let top = marginWidth * 2 - offset;
+  lyrics.forEach(({ text }, index) => {
+    if (top + heights[index] > 0 && top < ctx.canvas.height) {
+      // `top: 0` is ignored by `drawParagraph`
+      drawParagraph(offscreenCtx, text, { ...paragraphOptions, top: top || 1 });
+    }
+    top += heights[index];
+  });
+  offscreenCtx.globalCompositeOperation = 'source-in';
+  offscreenCtx.fillStyle = gradient1;
+  offscreenCtx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  offscreenCtx.restore();
+  ctx.drawImage(offscreenCtx.canvas, 0, 0);
+  drawLabel(ctx, 'UNSYNCED');
   ctx.restore();
 }

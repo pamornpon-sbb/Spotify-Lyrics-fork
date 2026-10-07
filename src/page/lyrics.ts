@@ -84,11 +84,14 @@ const buildInSingerAliasPromise = new Promise<Record<string, string>>(async (res
   );
 });
 
+const isThai = (s: string) => /\p{sc=Thai}/u.test(s);
+
 async function fetchChineseName(s: string, fetchOptions?: RequestInit) {
   const singerAlias: Record<string, string> = {};
   try {
     const { result } = await fetchNetEaseChineseName(s, fetchOptions);
     const artists = result?.artists || [];
+    const queryArtists = s.split(',');
     artists.forEach((artist) => {
       const alias = [...artist.alias, ...(artist.transNames || [])].map(simplifiedText).sort();
       // Chinese singer's English name as an alias
@@ -97,6 +100,12 @@ async function fetchChineseName(s: string, fetchOptions?: RequestInit) {
           singerAlias[n] = artist.name;
         }
       });
+      // Thai name of the queried singer, e.g. `ต่าย อรทัย` of `Tai Orathai`
+      if (queryArtists.includes(simplifiedText(artist.name))) {
+        alias.filter(isThai).forEach((n) => {
+          if (!singerAlias[n]) singerAlias[n] = artist.name;
+        });
+      }
     });
   } catch {}
   return singerAlias;
@@ -112,7 +121,7 @@ interface MatchingLyricsOptions {
 export async function matchingLyrics(
   query: Query,
   options: MatchingLyricsOptions = {},
-): Promise<{ list: Song[]; id: number; score: number }> {
+): Promise<{ list: Song[]; id: number; score: number; plainId: number; plainScore: number }> {
   const { name = '', artists = '' } = query;
   const {
     onlySearchName = false,
@@ -158,6 +167,9 @@ export async function matchingLyrics(
 
   let id = 0;
   let score = 0;
+  // best song that only has unsynced lyrics, never wins over a synced one
+  let plainId = 0;
+  let plainScore = 0;
   songs.forEach((song) => {
     const DURATION_WEIGHT = 10;
     let currentScore = 0;
@@ -219,7 +231,13 @@ export async function matchingLyrics(
       }
     }
 
-    let songArtistsArr = song.artists.map((e) => normalize(e.name)).sort();
+    // use the queried singer's name for its Thai name
+    const artistName = (name: string) =>
+      (isThai(name) &&
+        !queryArtistsArr.includes(normalize(name)) &&
+        singerAlias[simplifiedText(name)]) ||
+      name;
+    let songArtistsArr = song.artists.map((e) => normalize(artistName(e.name))).sort();
     const len = queryArtistsArr.length + songArtistsArr.length;
     if (queryArtistsArr.join() === songArtistsArr.join()) {
       currentScore += 6;
@@ -264,7 +282,14 @@ export async function matchingLyrics(
       }
     }
 
-    if (currentScore > score) {
+    if (song.plainOnly) {
+      if (currentScore > plainScore) {
+        if (currentScore > 10 + DURATION_WEIGHT) {
+          plainId = song.id;
+        }
+        plainScore = currentScore;
+      }
+    } else if (currentScore > score) {
       if (currentScore > 10 + DURATION_WEIGHT) {
         id = song.id;
       }
@@ -280,6 +305,8 @@ export async function matchingLyrics(
       id: idForMissingName,
       list: listForMissingName,
       score: scoreForMissingName,
+      plainId: plainIdForMissingName,
+      plainScore: plainScoreForMissingName,
     } = await matchingLyrics(query, {
       onlySearchName: true,
       fetchTransName: async () => singerAlias,
@@ -294,9 +321,17 @@ export async function matchingLyrics(
     });
     const resultId = scoreForMissingName > score ? idForMissingName : id;
     const resultScore = Math.max(scoreForMissingName, score);
-    return { id: resultId, list, score: resultScore };
+    const resultPlainId = plainScoreForMissingName > plainScore ? plainIdForMissingName : plainId;
+    const resultPlainScore = Math.max(plainScoreForMissingName, plainScore);
+    return {
+      id: resultId,
+      list,
+      score: resultScore,
+      plainId: resultPlainId,
+      plainScore: resultPlainScore,
+    };
   }
-  return { id, list, score };
+  return { id, list, score, plainId, plainScore };
 }
 
 export async function fetchLyric(songId: number, fetchOptions?: RequestInit) {
@@ -344,15 +379,28 @@ export function tryParseTimeStr(str?: string) {
   return { key, value, time: min * 60 + sec };
 }
 
+const otherInfoKeys = [
+  '作?\\s*词|作?\\s*曲|编\\s*曲?|监\\s*制?',
+  '.*编写|.*和音|.*和声|.*合声|.*提琴|.*录|.*工程|.*工作室|.*设计|.*剪辑|.*制作|.*发行|.*出品|.*后期|.*混音|.*缩混',
+  '母带|原唱|翻唱|题字|文案|海报|古筝|二胡|钢琴|吉他|贝斯|笛子|鼓|弦乐|人声',
+  'lrc|publish|vocal|guitar|program|produce|write',
+  'เนื้อร้อง|คำร้อง|ทำนอง|เรียบเรียง',
+];
+const otherInfoRegexp = new RegExp(`^(${otherInfoKeys.join('|')}).*(:|：)`, 'i');
+
+function transformText(text: string, lyricsTransform?: Options['lyrics-transform']) {
+  switch (lyricsTransform) {
+    case 'Simplified':
+      return toSimplified(text);
+    case 'Traditional':
+      return toTraditional(text);
+    default:
+      return text;
+  }
+}
+
 export function parseLyrics(lyricStr: string, options: ParseLyricsOptions = {}) {
   if (!lyricStr) return null;
-  const otherInfoKeys = [
-    '作?\\s*词|作?\\s*曲|编\\s*曲?|监\\s*制?',
-    '.*编写|.*和音|.*和声|.*合声|.*提琴|.*录|.*工程|.*工作室|.*设计|.*剪辑|.*制作|.*发行|.*出品|.*后期|.*混音|.*缩混',
-    '母带|原唱|翻唱|题字|文案|海报|古筝|二胡|钢琴|吉他|贝斯|笛子|鼓|弦乐',
-    'lrc|publish|vocal|guitar|program|produce|write',
-  ];
-  const otherInfoRegexp = new RegExp(`^(${otherInfoKeys.join('|')}).*(:|：)`, 'i');
 
   const lines = lyricStr.split(/\r?\n/).map((line) => line.trim());
   const lyrics = lines
@@ -371,7 +419,8 @@ export function parseLyrics(lyricStr: string, options: ParseLyricsOptions = {}) 
         text = text.replace(/\.|,|\?|!|;$/u, '');
       }
       if (!matchResult.length && options.keepPlainText) {
-        return [new Line(text)];
+        if (options.cleanLyrics && otherInfoRegexp.test(text)) return [];
+        return [new Line(transformText(text, options.lyricsTransform))];
       }
       return matchResult.map((slice) => {
         const result = new Line();
@@ -380,19 +429,7 @@ export function parseLyrics(lyricStr: string, options: ParseLyricsOptions = {}) 
         if (!isNaN(time)) {
           if (!options.cleanLyrics || !otherInfoRegexp.test(text)) {
             result.startTime = time;
-            switch (options.lyricsTransform) {
-              case 'Simplified': {
-                result.text = toSimplified(text);
-                break;
-              }
-              case 'Traditional': {
-                result.text = toTraditional(text);
-                break;
-              }
-              default:
-                result.text = text;
-                break;
-            }
+            result.text = transformText(text, options.lyricsTransform);
           }
         } else if (!options.cleanLyrics && key && value) {
           result.text = `${key.toUpperCase()}: ${value}`;
@@ -425,6 +462,24 @@ export function parseLyrics(lyricStr: string, options: ParseLyricsOptions = {}) 
     });
 
   return lyrics.length ? lyrics : null;
+}
+
+// at least 3 timed lines with text, credit lines are not counted
+export function hasSyncedLyrics(lyricStr: string) {
+  const lyrics = parseLyrics(lyricStr, { cleanLyrics: true }) || [];
+  return lyrics.filter(({ startTime, text }) => startTime !== null && text).length >= 3;
+}
+
+export function isUnsyncedLyrics(lyrics: Lyric) {
+  return !!lyrics?.length && lyrics.every(({ startTime }) => startTime === null);
+}
+
+// lyrics without timestamps, e.g. LRCLIB `plainLyrics`
+export function parseUnsyncedLyrics(lyricStr: string, options: ParseLyricsOptions = {}) {
+  const lyrics = parseLyrics(lyricStr, { ...options, cleanLyrics: true, keepPlainText: true });
+  return lyrics && isUnsyncedLyrics(lyrics) && lyrics.filter(({ text }) => text).length >= 3
+    ? lyrics
+    : null;
 }
 
 export function correctionLyrics(lyrics: Lyric, str: string) {

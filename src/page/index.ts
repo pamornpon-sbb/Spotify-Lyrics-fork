@@ -6,6 +6,7 @@ import {
   drawBackground,
   renderLyrics,
   renderHighlight,
+  renderUnsyncedLyrics,
   RenderLyricsOptions,
   RenderTextOptions,
 } from './canvas-renderer';
@@ -17,6 +18,7 @@ import { localConfig } from './config';
 import { getFPS } from './fps';
 import { getLyricsBtn } from './btn';
 import { delay, raf } from './timer';
+import { isUnsyncedLyrics } from './lyrics';
 
 import './observer';
 
@@ -54,6 +56,9 @@ const tick = async (options: OptionsAndI18n) => {
       });
     } else if (!lyrics && !highlightLyrics) {
       drawText(lyricCtx, i18nMap.pageTipNoLyrics, textOptions);
+    } else if (lyrics && isUnsyncedLyrics(lyrics)) {
+      const progress = audio.duration ? audio.currentTime / audio.duration : 0;
+      renderUnsyncedLyrics(lyricCtx, lyrics, progress, renderOptions);
     } else if (audio.duration && lyrics?.length) {
       renderLyrics(lyricCtx, lyrics, audio.currentTime, renderOptions);
     } else if (!audio.duration || lyrics?.length === 0 || highlightLyrics?.length === 0) {
