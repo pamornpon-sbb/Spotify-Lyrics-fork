@@ -3,6 +3,7 @@ import { html, customElement, connectStore, GemElement, property } from '@mantou
 import { store } from '../store';
 
 import { Song } from '../../page/lyrics';
+import { isLRCLIBId } from '../../page/lrclib';
 import { theme } from '../../common/theme';
 
 @connectStore(store)
@@ -49,10 +50,18 @@ export class SongItem extends GemElement {
         .status {
           padding-left: 1rem;
         }
+        .source {
+          font-size: 0.75rem;
+          padding: 0 0.25rem;
+          margin-right: 0.25rem;
+          border-radius: 0.25rem;
+          background: rgba(${theme.textRGB}, 0.1);
+        }
       </style>
       <div class="track-info">
         <div title=${name} class="track-name">${name}</div>
         <div class="artist-name">
+          <span class="source">${isLRCLIBId(id) ? 'LRCLIB' : 'NetEase'}</span>
           <span title="id: ${id}">${durationText}</span>
           • <span title=${artist}>${artist}</span> •
           <span title=${album.name}>${album.name}</span>
