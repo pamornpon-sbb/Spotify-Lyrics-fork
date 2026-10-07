@@ -43,13 +43,22 @@ export async function request(uri: string, options: RequestInit = {}) {
     return bgFetch(uri, options);
   } else {
     try {
-      const res = await fetch(uri, {
+      let res = await fetch(uri, {
         mode: 'cors',
         ...options,
       });
+      // server busy, e.g. lrclib.net responds 503 with `retry-after: 1`
+      for (let i = 0; i < 2 && (res.status === 503 || res.status === 429); i++) {
+        const sec = Math.min(Number(res.headers.get('retry-after')) || 1, 3);
+        await new Promise((r) => setTimeout(r, sec * 1000));
+        res = await fetch(uri, {
+          mode: 'cors',
+          ...options,
+        });
+      }
 
       if (res.status === 0) throw new Error('Request fail');
-      if (res.status >= 400) throw new Error(res.statusText);
+      if (res.status >= 400) throw new Error(res.statusText || `HTTP ${res.status}`);
       const res2 = res.clone();
       try {
         return await res.json();
