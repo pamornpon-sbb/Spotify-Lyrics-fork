@@ -16,6 +16,7 @@ interface LrcLibLyricRes {
   duration: number;
   instrumental: boolean;
   syncedLyrics: string;
+  plainLyrics: string;
 }
 
 export async function fetchLRCLIBSongList(s: string, fetchOptions?: RequestInit): Promise<Song[]> {
@@ -26,13 +27,14 @@ export async function fetchLRCLIBSongList(s: string, fetchOptions?: RequestInit)
   );
   const list = await fetchPromise;
   return list
-    .filter((e) => !!e.syncedLyrics)
+    .filter((e) => !e.instrumental && (e.syncedLyrics || e.plainLyrics))
     .map((e) => ({
       album: { name: e.albumName },
       artists: e.artistName.split(',').map((name) => ({ name, alias: [] })),
       id: e.id + LRCLIB_ID_TOKEN,
       name: e.trackName,
       duration: e.duration * 1000,
+      plainOnly: !e.syncedLyrics,
     }));
 }
 
@@ -40,9 +42,9 @@ export async function fetchLRCLIBLyric(
   songId: number,
   fetchOptions?: RequestInit,
 ): Promise<SongLyricResult> {
-  const { syncedLyrics = '' }: LrcLibLyricRes = await request(
+  const { syncedLyrics = '', plainLyrics = '' }: LrcLibLyricRes = await request(
     `${API_HOST}/get/${songId}`,
     fetchOptions,
   );
-  return { lrc: { lyric: syncedLyrics } };
+  return { lrc: { lyric: syncedLyrics || plainLyrics } };
 }

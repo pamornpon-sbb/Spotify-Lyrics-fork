@@ -43,6 +43,11 @@
     "description": "Cancel manually set lyrics"
   },
 
+  "popupUnsyncedTag": {
+    "message": "Unsynced",
+    "description": "Tag of a track whose lyrics have no timestamps"
+  },
+
   "popupMatchDescription1": {
     "message": "Try other lyrics or",
     "description": "Lyric matching description1"

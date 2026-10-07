@@ -5,6 +5,7 @@ import { store } from '../store';
 import { Song } from '../../page/lyrics';
 import { isLRCLIBId } from '../../page/lrclib';
 import { theme } from '../../common/theme';
+import { i18n } from '../../i18n';
 
 @connectStore(store)
 @customElement('app-track-item')
@@ -13,13 +14,15 @@ export class SongItem extends GemElement {
 
   render() {
     if (!this.song) return null;
-    const { id, name, artists, album, duration } = this.song;
+    const { id, name, artists, album, duration, plainOnly } = this.song;
     const durationText = duration
       ? `${Math.floor(duration / 1000 / 60)}:${(Math.floor(duration / 1000) % 60)
           .toString()
           .padStart(2, '0')}`
       : '';
     const checked = id === store.id;
+    const source = isLRCLIBId(id) ? 'LRCLIB' : 'NetEase';
+    const sourceTag = plainOnly ? `${source} · ${i18n.popupUnsyncedTag()}` : source;
     const artist = artists.map(({ name }) => name).join(',');
     return html`
       <style>
@@ -61,7 +64,7 @@ export class SongItem extends GemElement {
       <div class="track-info">
         <div title=${name} class="track-name">${name}</div>
         <div class="artist-name">
-          <span class="source">${isLRCLIBId(id) ? 'LRCLIB' : 'NetEase'}</span>
+          <span class="source">${sourceTag}</span>
           <span title="id: ${id}">${durationText}</span>
           • <span title=${artist}>${artist}</span> •
           <span title=${album.name}>${album.name}</span>
