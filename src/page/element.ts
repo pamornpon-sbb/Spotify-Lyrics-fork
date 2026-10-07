@@ -119,7 +119,8 @@ const firstAudioPromise = new Promise<HTMLAudioElement>((resolveAudio) => {
     if (playInOtherDevice) {
       requestAnimationFrame(queryOtherDeviceMockAudio);
     } else {
-      audio = data?.oldAudio || null;
+      // only restore when leaving other device mode, otherwise the next created video is captured
+      if (data) audio = data.oldAudio || null;
       setTimeout(queryOtherDeviceMockAudio, 1000);
     }
   };

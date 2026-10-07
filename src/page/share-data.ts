@@ -157,20 +157,25 @@ export class SharedData {
   }
 
   private async _fetchHighlight(fetchOptions: RequestInit) {
-    const fetchTransName = async () => ({});
-    const { id } = await matchingLyrics(this.req, {
-      onlySearchName: false,
-      fetchSongList,
-      fetchTransName,
-      fetchOptions,
-    });
-    if (id === 0) {
-      this._highlightLyrics = null;
-    } else {
-      const { text, highlights } = await fetchGeniusLyrics(id, fetchOptions);
-      this._lyrics = correctionLyrics(this._lyrics, text);
-      this._text = text;
-      this._highlightLyrics = highlights;
+    try {
+      const fetchTransName = async () => ({});
+      const { id } = await matchingLyrics(this.req, {
+        onlySearchName: false,
+        fetchSongList,
+        fetchTransName,
+        fetchOptions,
+      });
+      if (id === 0) {
+        this._highlightLyrics = null;
+      } else {
+        const { text, highlights } = await fetchGeniusLyrics(id, fetchOptions);
+        this._lyrics = correctionLyrics(this._lyrics, text);
+        this._text = text;
+        this._highlightLyrics = highlights;
+      }
+    } catch {
+      // `[]` is loading, show no lyrics instead of loading forever
+      if (!fetchOptions.signal?.aborted) this._highlightLyrics = null;
     }
   }
 
@@ -190,15 +195,18 @@ export class SharedData {
       matchingLyrics(this.req, {
         fetchSongList:
           options['lyrics-server'] === 'NetEase' ? fetchNetEaseSongList : fetchLRCLIBSongList,
-        getDuration: async () => {
-          const audioMetadataLoaded = new Promise<any>((res) =>
-            audio.addEventListener('loadedmetadata', res, { once: true }),
-          );
-          return Promise.any<number>([
+        getDuration: () =>
+          Promise.any<number>([
             getCache(this._name, this._artists).durationPromise,
-            audio.duration || (await audioMetadataLoaded) || audio.duration,
-          ]);
-        },
+            audio.duration ||
+              new Promise<number>((res) =>
+                audio.addEventListener('loadedmetadata', () => res(audio.duration), {
+                  once: true,
+                }),
+              ),
+            // 0 is unknown duration, avoid waiting forever
+            new Promise<number>((res) => setTimeout(() => res(0), 3000)),
+          ]),
         fetchOptions,
       }),
       getSong(this.req, fetchOptions),
