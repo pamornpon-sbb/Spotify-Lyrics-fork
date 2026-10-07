@@ -157,20 +157,25 @@ export class SharedData {
   }
 
   private async _fetchHighlight(fetchOptions: RequestInit) {
-    const fetchTransName = async () => ({});
-    const { id } = await matchingLyrics(this.req, {
-      onlySearchName: false,
-      fetchSongList,
-      fetchTransName,
-      fetchOptions,
-    });
-    if (id === 0) {
-      this._highlightLyrics = null;
-    } else {
-      const { text, highlights } = await fetchGeniusLyrics(id, fetchOptions);
-      this._lyrics = correctionLyrics(this._lyrics, text);
-      this._text = text;
-      this._highlightLyrics = highlights;
+    try {
+      const fetchTransName = async () => ({});
+      const { id } = await matchingLyrics(this.req, {
+        onlySearchName: false,
+        fetchSongList,
+        fetchTransName,
+        fetchOptions,
+      });
+      if (id === 0) {
+        this._highlightLyrics = null;
+      } else {
+        const { text, highlights } = await fetchGeniusLyrics(id, fetchOptions);
+        this._lyrics = correctionLyrics(this._lyrics, text);
+        this._text = text;
+        this._highlightLyrics = highlights;
+      }
+    } catch {
+      // `[]` is loading, show no lyrics instead of loading forever
+      if (!fetchOptions.signal?.aborted) this._highlightLyrics = null;
     }
   }
 
@@ -186,24 +191,46 @@ export class SharedData {
     const startTime = audio.currentSrc ? performance.now() : null;
     const options = await optionsPromise;
     const parseLyricsOptions = await this._getParseLyricsOptions();
-    const [{ list, id }, remoteData] = await Promise.all([
+    // the selected lyrics server first, the other one is the fallback
+    const [mainSongList, fallbackSongList] =
+      options['lyrics-server'] === 'NetEase'
+        ? [fetchNetEaseSongList, fetchLRCLIBSongList]
+        : [fetchLRCLIBSongList, fetchNetEaseSongList];
+    const matching = (fetchSongList: typeof fetchLRCLIBSongList) =>
       matchingLyrics(this.req, {
-        fetchSongList:
-          options['lyrics-server'] === 'NetEase' ? fetchNetEaseSongList : fetchLRCLIBSongList,
-        getDuration: async () => {
-          const audioMetadataLoaded = new Promise<any>((res) =>
-            audio.addEventListener('loadedmetadata', res, { once: true }),
-          );
-          return Promise.any<number>([
+        fetchSongList,
+        getDuration: () =>
+          Promise.any<number>([
             getCache(this._name, this._artists).durationPromise,
-            audio.duration || (await audioMetadataLoaded) || audio.duration,
-          ]);
-        },
+            audio.duration ||
+              new Promise<number>((res) =>
+                audio.addEventListener('loadedmetadata', () => res(audio.duration), {
+                  once: true,
+                }),
+              ),
+            // 0 is unknown duration, avoid waiting forever
+            new Promise<number>((res) => setTimeout(() => res(0), 3000)),
+          ]),
         fetchOptions,
+      });
+    // server errors are treated as no lyrics, keep them to show if all servers fail
+    const errors: Error[] = [];
+    const ignoreServerError = <T>(promise: Promise<T>) =>
+      promise.catch((err: Error) => {
+        if (err.name === 'AbortError') throw err;
+        errors.push(err);
+        return null;
+      });
+    const [main, remoteData] = await Promise.all([
+      ignoreServerError(matching(mainSongList)),
+      // remote data is optional
+      getSong(this.req, fetchOptions).catch((err: Error) => {
+        if (err.name === 'AbortError') throw err;
+        return undefined;
       }),
-      getSong(this.req, fetchOptions),
     ]);
-    this._list = list;
+    let id = main?.id || 0;
+    this._list = main?.list || [];
     const reviewed = options['use-unreviewed-lyrics'] === 'on' || remoteData?.reviewed;
     const isSelf = remoteData?.user === options.cid;
 
@@ -231,18 +258,27 @@ export class SharedData {
     else {
       this._id = (reviewed ? remoteData?.neteaseID || id : id || remoteData?.neteaseID) || 0;
       this._aId = this._id;
-      // Allow adjustment order
-      const getLyricsList = [
-        this._getLyricsFromAPI.bind(this),
-        this._getLyricsFromBuiltIn.bind(this),
-      ];
-      try {
-        this._lyrics = await getLyricsList[0](fetchOptions);
-      } catch {
-        //
-      }
-      if (this._lyrics === null) {
-        this._lyrics = await getLyricsList[1](fetchOptions);
+      this._lyrics = await ignoreServerError(this._getLyricsFromAPI(fetchOptions));
+      // the selected server is down or has no lyrics/songs, try the other one
+      if (!this._lyrics || !this._list.length) {
+        const mainErrorCount = errors.length;
+        const fallback = await ignoreServerError(matching(fallbackSongList));
+        if (!this._lyrics && fallback?.id) {
+          id = fallback.id;
+          this._id = id;
+          this._aId = id;
+          this._lyrics = await ignoreServerError(this._getLyricsFromAPI(fetchOptions));
+          // popup lists the songs of the server that has the lyrics
+          if (this._lyrics) this._list = fallback.list;
+        }
+        if (!this._list.length) this._list = fallback?.list || [];
+        if (!this._lyrics) {
+          this._lyrics = await this._getLyricsFromBuiltIn(fetchOptions);
+        }
+        // show the error only when both servers fail
+        if (!this._lyrics && mainErrorCount && errors.length > mainErrorCount) {
+          throw errors[errors.length - 1];
+        }
       }
     }
     if (this._lyrics && this._id !== id) {

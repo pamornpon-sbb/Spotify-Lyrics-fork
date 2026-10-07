@@ -1,5 +1,4 @@
 import { configPromise } from './config';
-import { fetchLRCLIBSongList } from './lrclib';
 import { request } from './request';
 
 interface Artist {
@@ -55,11 +54,8 @@ export async function fetchNetEaseChineseName(
   return request(`${API_HOST}/search?${searchQuery}`, fetchOptions);
 }
 
-// auto swtch to lrclib
-let down = 0;
+// fallback to lrclib is handled by `SharedData`
 export async function fetchNetEaseSongList(s: string, fetchOptions?: RequestInit) {
-  if (down > 3) return fetchLRCLIBSongList(s, fetchOptions);
-
   const { API_HOST } = await configPromise;
   const searchQuery = new URLSearchParams({
     keywords: s,
@@ -67,13 +63,8 @@ export async function fetchNetEaseSongList(s: string, fetchOptions?: RequestInit
     limit: '100',
   });
 
-  try {
-    const res: SearchSongsResult = await request(`${API_HOST}/search?${searchQuery}`, fetchOptions);
-    return res.result?.songs || [];
-  } catch (err) {
-    down++;
-    return fetchLRCLIBSongList(s, fetchOptions);
-  }
+  const res: SearchSongsResult = await request(`${API_HOST}/search?${searchQuery}`, fetchOptions);
+  return res.result?.songs || [];
 }
 
 export async function fetchNetEaseLyric(

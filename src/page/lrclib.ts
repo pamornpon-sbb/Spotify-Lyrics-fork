@@ -5,6 +5,9 @@ const API_HOST = `https://lrclib.net/api`;
 
 export const LRCLIB_ID_TOKEN = 0.1;
 
+export const isLRCLIBId = (songId: number) =>
+  Math.round((songId % 1) * 10) / 10 === LRCLIB_ID_TOKEN;
+
 interface LrcLibLyricRes {
   id: number;
   trackName: string;

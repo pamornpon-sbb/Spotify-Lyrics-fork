@@ -89,7 +89,9 @@ export const insetLyricsBtn = async () => {
 
   const btnWrapper = querySelector(BTN_WRAPPER_SELECTOR) as HTMLDivElement;
   const likeBtn = documentQueryHasSelector(BTN_LIKE_SELECTOR) as HTMLButtonElement;
-  if (!btnWrapper || !likeBtn) return;
+  // Spotify renders the like button wrapper before its content,
+  // cloning it too early creates an empty (0x0) lyrics button
+  if (!btnWrapper || !likeBtn?.childElementCount) return;
 
   if (btnWrapper.getElementsByClassName(localConfig.LYRICS_CLASSNAME).length) return;
 
